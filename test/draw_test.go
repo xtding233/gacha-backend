@@ -3,7 +3,7 @@ package test
 import (
 	"testing"
 
-	"github.com/xtding233/gacha/internal/gacha"
+	"github.com/xtding233/gacha-backend/internal/gacha"
 )
 
 func TestDrawBounds(t *testing.T) {
@@ -38,7 +38,7 @@ func TestDrawStatApprox(t *testing.T) {
 		}
 	}
 	freq := float64(hit) / float64(n)
-	// 经验频率接近 0.3；给个宽松带（±0.01）
+	// should be around 0.3
 	if diff := freq - p; diff > 0.01 || diff < -0.01 {
 		t.Fatalf("freq=%f not close to p=%f", freq, p)
 	}
