@@ -376,11 +376,139 @@ func handleDrawNBanner(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// Simulation response DTO
+type simResp struct {
+	Mean   float64 `json:"mean"`
+	Var    float64 `json:"var"`
+	StdDev float64 `json:"stdDev"`
+	P50    float64 `json:"p50"`
+	P90    float64 `json:"p90"`
+	P99    float64 `json:"p99"`
+	Err    string  `json:"err,omitempty"`
+}
+
+// /simulate?goal=first_up&trials=200000
+//   &p=0.006&pity=90[&start=74|&start_pct=0.9][&target=0.8][&easing=easeOutQuad][&cushion=73]
+//   [&off_probs=0.5,0.4,0.3][&max_off=3]
+//   [&budget_n=90]  // only for goal=fixed_budget
+func handleSimulate(w http.ResponseWriter, r *http.Request) {
+	goalStr := r.URL.Query().Get("goal")
+	if goalStr == "" {
+		goalStr = string(gacha.GoalFirstUP) // sensible default
+	}
+	var goal gacha.TrialGoal
+	switch goalStr {
+	case string(gacha.GoalFirstHit):
+		goal = gacha.GoalFirstHit
+	case string(gacha.GoalFirstUP):
+		goal = gacha.GoalFirstUP
+	case string(gacha.GoalFixedBudget):
+		goal = gacha.GoalFixedBudget
+	default:
+		http.Error(w, "invalid goal", http.StatusBadRequest)
+		return
+	}
+
+	p, ok, msg := qFloat(r, "p")
+	if !ok {
+		http.Error(w, "missing param p", http.StatusBadRequest)
+		return
+	}
+	if msg != "" {
+		http.Error(w, msg, http.StatusBadRequest)
+		return
+	}
+	pity, ok, msg := qInt(r, "pity")
+	if !ok || pity <= 0 {
+		http.Error(w, "missing/invalid param pity", http.StatusBadRequest)
+		return
+	}
+	trials, ok, msg := qInt(r, "trials")
+	if !ok || trials <= 0 {
+		http.Error(w, "missing/invalid param trials", http.StatusBadRequest)
+		return
+	}
+
+	// soft pity optional params
+	var startOpt *int
+	if v, has, _ := qInt(r, "start"); has {
+		startOpt = &v
+	}
+	var startPctOpt *float64
+	if v, has, _ := qFloat(r, "start_pct"); has {
+		startPctOpt = &v
+	}
+	var targetOpt *float64
+	if v, has, _ := qFloat(r, "target"); has {
+		targetOpt = &v
+	}
+	easing := r.URL.Query().Get("easing")
+	cushion := 0
+	if v, has, _ := qInt(r, "cushion"); has {
+		cushion = v
+	}
+
+	// banner multi-off
+	rawOff := r.URL.Query().Get("off_probs")
+	offProbs, perr := parseOffProbs(rawOff)
+	if perr != "" {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(simResp{Err: perr})
+		return
+	}
+	maxOff, hasMax, _ := qInt(r, "max_off")
+	if !hasMax {
+		maxOff = 0
+	}
+
+	// fixed budget (optional; only used for goal=fixed_budget)
+	var budget *gacha.SimBudget
+	if goal == gacha.GoalFixedBudget {
+		if v, has, _ := qInt(r, "budget_n"); has && v > 0 {
+			budget = &gacha.SimBudget{NumDraws: v}
+		} else {
+			http.Error(w, "missing/invalid budget_n for fixed_budget", http.StatusBadRequest)
+			return
+		}
+	}
+
+	params := gacha.SimParams{
+		PBase:     p,
+		Pity:      pity,
+		StartAt:   startOpt,
+		StartPct:  startPctOpt,
+		TargetProb: targetOpt,
+		Easing:    easing,
+		Cushion:   cushion,
+		OffProbs:  offProbs,
+		MaxOff:    maxOff,
+	}
+
+	stats, err := gacha.RunMonteCarlo(params, goal, trials, budget)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(simResp{Err: err.Error()})
+		return
+	}
+
+	resp := simResp{
+		Mean:   stats.Mean,
+		Var:    stats.Var,
+		StdDev: stats.StdDev,
+		P50:    stats.P50,
+		P90:    stats.P90,
+		P99:    stats.P99,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+
 func main() {
 	http.HandleFunc("/draw_n", handleDrawN)            // plain N draws (no pity, no banner)
 	http.HandleFunc("/draw_n_pity", handleDrawNPity)   // soft/hard pity N draws
 	http.HandleFunc("/draw_n_banner", handleDrawNBanner) // soft/hard pity + multi-off banner N draws
-
+	http.HandleFunc("/simulate", handleSimulate)
 	log.Println("listening on :8080 ...")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
