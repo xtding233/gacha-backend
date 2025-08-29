@@ -1,0 +1,17 @@
+# games/default.yaml
+version: 1
+notes: "Global defaults; per-game files override."
+draw:
+  pity: 90
+  p_base: 0.006
+  soft:
+    mode: target_ramp # or per_draw_increment
+    start_pct: 0.9
+    target: 0.8
+    easing: easeOutQuad
+banner:
+  off_probs: [0.5]
+  max_off: 1
+tokens:
+  per_draw: 160
+  per_ten_draw: 1600

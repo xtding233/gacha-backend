@@ -30,3 +30,12 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+
+# Games
+/games/*.yaml
+!/games/default.yaml
+/games/**/pools/*.yaml
+/games/examples/
+/secrets/
+/local-config/
