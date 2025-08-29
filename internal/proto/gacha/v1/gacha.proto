@@ -1,0 +1,187 @@
+syntax = "proto3";
+
+package gacha.v1;
+
+// Go package option (adjust to your repo path).
+option go_package = "github.com/xtding233/gacha-backend/gen/gacha/v1;gachav1";
+
+// Common enums
+
+// Soft pity curve mode. Matches our engine's two modes.
+enum SoftPityMode {
+  SOFT_PITY_MODE_UNSPECIFIED = 0;
+  // Interpolate base p -> target across [start .. pity-1] using easing.
+  SOFT_PITY_MODE_TARGET_RAMP = 1;
+  // Add a fixed increment to probability each draw after start.
+  SOFT_PITY_MODE_PER_DRAW_INCREMENT = 2;
+}
+
+// Easing used by TARGET_RAMP mode.
+enum Easing {
+  EASING_UNSPECIFIED = 0;
+  EASING_LINEAR = 1;
+  EASING_EASE_OUT_QUAD = 2;
+  EASING_EASE_IN_OUT_CUBIC = 3;
+}
+
+// Monte Carlo trial goal.
+enum TrialGoal {
+  TRIAL_GOAL_UNSPECIFIED = 0;
+  TRIAL_GOAL_FIRST_HIT = 1;   // draws until first high-rarity hit
+  TRIAL_GOAL_FIRST_UP  = 2;   // draws until first UP (banner-aware)
+  TRIAL_GOAL_FIXED_BUDGET = 3;// count hits/UPs within a fixed N
+}
+
+// Identifies a game/pool to load config for.
+message GameRef {
+  string game = 1; // e.g., "hsr", "bangdream", "arknights", "fgo"
+  string pool = 2; // optional pool/bannner id; empty for game-level config
+}
+
+// Soft pity overrides (request-level). Use only the fields you want to override.
+message SoftPityOverrides {
+  SoftPityMode mode = 1;     // optional, defaults to config
+  int32 start_at = 2;        // 0-based index since last hit
+  double start_pct = 3;      // alternative to start_at, [0..1]
+  double target = 4;         // TARGET_RAMP: probability at (pity-1)
+  double increment = 5;      // PER_DRAW_INCREMENT: +p per draw after start
+  Easing easing = 6;         // easing for TARGET_RAMP
+}
+
+// Banner (UP/off) overrides.
+message BannerOverrides {
+  repeated double off_probs = 1; // e.g., [0.5] or [0.5,0.4,0.3], each in (0,1)
+  int32 max_off = 2;             // <=0 means default to len(off_probs)
+}
+
+// ---------- Requests / Responses ----------
+
+// Common resolution request: merge default -> game -> pool -> overrides to parameters.
+message ResolveRequest {
+  GameRef ref = 1;
+  // Optional overrides
+  double p_base = 2;                // in (0,1)
+  int32 pity = 3;                   // >=1
+  SoftPityOverrides soft = 4;       // optional
+  BannerOverrides banner = 5;       // optional
+  int32 cushion = 6;                // initial draws since last hit when entering the pool
+}
+
+message ResolveResponse {
+  // Fully-resolved effective parameters the engine will use.
+  double p_base = 1;
+  int32 pity = 2;
+  SoftPityMode soft_mode = 3;
+  // For TARGET_RAMP
+  int32 start_at = 4;
+  double start_pct = 5;
+  double target = 6;
+  Easing easing = 7;
+  // For PER_DRAW_INCREMENT
+  double increment = 8;
+
+  // Banner
+  repeated double off_probs = 20;
+  int32 max_off = 21;
+
+  // Carry-over count
+  int32 cushion = 30;
+
+  // Config tracing
+  string effective_version = 40;
+  string notes = 41;
+}
+
+// N-draw (no pity/bannner)
+message DrawNRequest {
+  GameRef ref = 1;
+  int32 n = 2;              // required, >0
+  // Optional overrides:
+  double p_base = 3;
+}
+message DrawNResponse {
+  repeated bool hits = 1;   // length n
+}
+
+// N-draw with soft/hard pity but no banner layer.
+message DrawNPityRequest {
+  GameRef ref = 1;
+  int32 n = 2;                 // required
+  // Optional overrides:
+  double p_base = 3;
+  int32 pity = 4;
+  SoftPityOverrides soft = 5;
+  int32 cushion = 6;
+}
+message DrawNPityResponse {
+  repeated bool hits = 1;  // length n
+  int32 count = 2;         // draws since last hit after the batch
+}
+
+// Banner outcome per draw.
+message BannerOutcome {
+  bool hit = 1;    // high-rarity occurred
+  bool is_up = 2;  // true if featured (UP) when hit==true
+}
+
+// N-draw with soft/hard pity + banner multi-off logic.
+message DrawNBannerRequest {
+  GameRef ref = 1;
+  int32 n = 2;                 // required
+  // Optional overrides:
+  double p_base = 3;
+  int32 pity = 4;
+  SoftPityOverrides soft = 5;
+  int32 cushion = 6;
+  BannerOverrides banner = 7;
+}
+message DrawNBannerResponse {
+  repeated BannerOutcome results = 1; // length n
+  int32 count = 2;                    // pity counter after the batch
+  bool guaranteed_next = 3;           // next hit must be UP
+  int32 off_streak = 4;               // consecutive offs after the batch
+}
+
+// Monte Carlo simulation.
+message SimulateRequest {
+  GameRef ref = 1;
+  TrialGoal goal = 2;    // default FIRST_UP if unspecified
+  int32 trials = 3;      // required, >0
+  // Optional overrides (same as draw banner; include cushion & banner)
+  double p_base = 10;
+  int32 pity = 11;
+  SoftPityOverrides soft = 12;
+  int32 cushion = 13;
+  BannerOverrides banner = 14;
+  // Only used for FIXED_BUDGET
+  int32 budget_n = 20;   // number of draws per trial
+}
+message SimulateResponse {
+  double mean = 1;
+  double variance = 2;
+  double std_dev = 3;
+  double p50 = 4;
+  double p90 = 5;
+  double p99 = 6;
+  // echo back version for tracing
+  string effective_version = 10;
+}
+
+// ---------- Services ----------
+
+service GachaService {
+  // Resolve effective parameters for a game/pool with optional overrides.
+  rpc Resolve (ResolveRequest) returns (ResolveResponse);
+
+  // Plain Bernoulli draws (no pity, no banner).
+  rpc DrawN (DrawNRequest) returns (DrawNResponse);
+
+  // Soft/hard pity draws (no banner).
+  rpc DrawNPity (DrawNPityRequest) returns (DrawNPityResponse);
+
+  // Soft/hard pity + banner multi-off draws.
+  rpc DrawNBanner (DrawNBannerRequest) returns (DrawNBannerResponse);
+
+  // Monte Carlo simulation.
+  rpc Simulate (SimulateRequest) returns (SimulateResponse);
+}

@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package game.v1;
+
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/xtding233/gacha-backend/gen/game/v1;gamev1";
+
+// Identifies a game and an optional pool.
+message GameRef {
+  string game = 1; // short id, e.g. "hsr", "bangdream", "arknights", "fgo"
+  string pool = 2; // optional, e.g. "character_2025q3"
+}
+
+// ---------- Config descriptors ----------
+
+// Minimal metadata for listing games.
+message GameMeta {
+  string game = 1;
+  string display_name = 2; // e.g. "Honkai: Star Rail"
+  repeated string pools = 3; // known pool ids
+  string version = 4;        // current config version
+}
+
+// Raw YAML/JSON config string (for debug).
+message RawConfig {
+  string text = 1;           // YAML or JSON representation
+  string version = 2;
+}
+
+// Effective merged config (already normalized to engine params).
+message EffectiveConfig {
+  double p_base = 1;
+  int32 pity = 2;
+  string soft_mode = 3;      // "target_ramp" | "per_draw_increment"
+  int32 start_at = 4;
+  double start_pct = 5;
+  double target = 6;
+  double increment = 7;
+  string easing = 8;
+  repeated double off_probs = 20;
+  int32 max_off = 21;
+  int32 cushion = 30;
+  string version = 40;
+  string notes = 41;
+}
+
+// ---------- Service RPCs ----------
+
+service GameService {
+  // List all games currently configured.
+  rpc ListGames(google.protobuf.Empty) returns (stream GameMeta);
+
+  // Get raw YAML config for a game/pool (debug / admin).
+  rpc GetRawConfig(GameRef) returns (RawConfig);
+
+  // Get merged & normalized effective config.
+  rpc GetEffectiveConfig(GameRef) returns (EffectiveConfig);
+
+  // Validate a candidate config (before saving/deploying).
+  rpc ValidateConfig(RawConfig) returns (ValidationResult);
+}
+
+// ---------- Validation ----------
+
+message ValidationResult {
+  bool ok = 1;
+  repeated string errors = 2;
+}
